@@ -4,6 +4,7 @@ using HarmonyLib;
 using System.Linq;
 using System.Reflection;
 using System;
+using System.Collections.Generic;
 
 [assembly: MelonInfo(typeof(InstantDeliverySupplier.MainMod), "Instant Delivery Supplier", "1.0.0", "Kua8 On Cord")]
 [assembly: MelonGame("TVGS", "Schedule I Free Sample")]
@@ -22,7 +23,6 @@ namespace InstantDeliverySupplier
             try
             {
                 Instance = this;
-                LoggerInstance.Msg("[Startup] Instant Delivery Supplier mod initializing...");
 
                 // Find the Supplier and ProductManager types
                 foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
@@ -33,37 +33,17 @@ namespace InstantDeliverySupplier
                         {
                             supplierType = asm.GetType("ScheduleOne.Economy.Supplier");
                             productManagerType = asm.GetType("ScheduleOne.Product.ProductManager");
-
-                            if (supplierType != null)
-                            {
-                                LoggerInstance.Msg($"[Startup] Found Supplier type: {supplierType.FullName}");
-                                var methods = supplierType.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-                                foreach (var method in methods)
-                                {
-                                    LoggerInstance.Msg($"[Startup] Supplier method: {method.Name}");
-                                }
-                            }
-
-                            if (productManagerType != null)
-                            {
-                                LoggerInstance.Msg($"[Startup] Found ProductManager type: {productManagerType.FullName}");
-                                var methods = productManagerType.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-                                foreach (var method in methods)
-                                {
-                                    LoggerInstance.Msg($"[Startup] ProductManager method: {method.Name}");
-                                }
-                            }
                         }
                         catch (Exception ex)
                         {
-                            LoggerInstance.Error($"[Startup] Error loading types: {ex.Message}");
+                            Instance.LoggerInstance.Error($"Error loading types: {ex.Message}");
                         }
                     }
                 }
 
                 if (supplierType == null && productManagerType == null)
                 {
-                    LoggerInstance.Error("[Startup] Could not find required types!");
+                    Instance.LoggerInstance.Error("Could not find required types!");
                     return;
                 }
 
@@ -78,7 +58,6 @@ namespace InstantDeliverySupplier
                     
                     if (setIsAcceptingOrder != null)
                     {
-                        LoggerInstance.Msg("[Startup] Found SetIsAcceptingOrder method, patching...");
                         harmony.Patch(
                             setIsAcceptingOrder,
                             prefix: new HarmonyMethod(typeof(MainMod).GetMethod(nameof(SetIsAcceptingOrderPrefix), 
@@ -87,143 +66,155 @@ namespace InstantDeliverySupplier
                     }
                 }
 
-                // Try to patch Supplier if found
+                // Try to patch Supplier methods
                 if (supplierType != null)
                 {
-                    var placeOrder = supplierType.GetMethod("PlaceOrder", 
+                    // Patch DeaddropConfirmed
+                    var deaddropConfirmed = supplierType.GetMethod("DeaddropConfirmed", 
                         BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-                    
-                    if (placeOrder != null)
+                    if (deaddropConfirmed != null)
                     {
-                        LoggerInstance.Msg("[Startup] Found PlaceOrder method, patching...");
                         harmony.Patch(
-                            placeOrder,
-                            prefix: new HarmonyMethod(typeof(MainMod).GetMethod(nameof(PlaceOrderPrefix), 
+                            deaddropConfirmed,
+                            prefix: new HarmonyMethod(typeof(MainMod).GetMethod(nameof(DeaddropConfirmedPrefix), 
+                                BindingFlags.Static | BindingFlags.NonPublic)),
+                            postfix: new HarmonyMethod(typeof(MainMod).GetMethod(nameof(DeaddropConfirmedPostfix),
+                                BindingFlags.Static | BindingFlags.NonPublic))
+                        );
+                    }
+
+                    // Patch SetDeaddrop
+                    var setDeaddrop = supplierType.GetMethod("SetDeaddrop", 
+                        BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                    if (setDeaddrop != null)
+                    {
+                        harmony.Patch(
+                            setDeaddrop,
+                            prefix: new HarmonyMethod(typeof(MainMod).GetMethod(nameof(SetDeaddropPrefix), 
+                                BindingFlags.Static | BindingFlags.NonPublic))
+                        );
+                    }
+
+                    // Patch GetDeadDropLimit to remove limits
+                    var getDeadDropLimit = supplierType.GetMethod("GetDeadDropLimit", 
+                        BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                    if (getDeadDropLimit != null)
+                    {
+                        harmony.Patch(
+                            getDeadDropLimit,
+                            prefix: new HarmonyMethod(typeof(MainMod).GetMethod(nameof(GetDeadDropLimitPrefix), 
+                                BindingFlags.Static | BindingFlags.NonPublic))
+                        );
+                    }
+
+                    // Also patch minsUntilDeaddropReady property
+                    var setMinsUntilReady = supplierType.GetMethod("set_minsUntilDeaddropReady",
+                        BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                    if (setMinsUntilReady != null)
+                    {
+                        harmony.Patch(
+                            setMinsUntilReady,
+                            prefix: new HarmonyMethod(typeof(MainMod).GetMethod(nameof(SetMinsUntilDeaddropReadyPrefix),
                                 BindingFlags.Static | BindingFlags.NonPublic))
                         );
                     }
                 }
-
-                LoggerInstance.Msg("[Startup] Initialization complete!");
             }
             catch (Exception ex)
             {
-                LoggerInstance.Error($"[Startup] Error during initialization: {ex}");
+                Instance.LoggerInstance.Error($"Error during initialization: {ex}");
             }
         }
 
-        private static bool SetIsAcceptingOrderPrefix(object __instance, bool value)
+        private static bool SetIsAcceptingOrderPrefix(object __instance, bool accepting)
         {
             try
             {
-                Instance.LoggerInstance.Msg($"[Order] SetIsAcceptingOrder called with value: {value}");
-                // Always allow orders
-                return false;
+                return false; // Always allow orders
             }
             catch (Exception ex)
             {
-                Instance.LoggerInstance.Error($"[Order] Error in SetIsAcceptingOrder: {ex}");
+                Instance.LoggerInstance.Error($"Error in SetIsAcceptingOrder: {ex}");
                 return true;
             }
         }
 
-        private static bool PlaceOrderPrefix(object __instance, int amount, ref bool __result)
+        private static bool DeaddropConfirmedPrefix(object __instance, object cart, float totalPrice)
         {
             try
             {
-                Instance.LoggerInstance.Msg($"[Order] Attempting to place order for {amount} seeds");
-
-                // Get the stash amount
-                var getStashAmount = __instance.GetType().GetMethod("GetStashAmount", 
-                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-                if (getStashAmount == null)
-                {
-                    Instance.LoggerInstance.Error("[Order] Could not find GetStashAmount method!");
-                    return true;
-                }
-
-                var stashAmount = (int)getStashAmount.Invoke(__instance, null);
-                Instance.LoggerInstance.Msg($"[Order] Current stash amount: {stashAmount}");
-
-                // Check amount
-                if (amount > stashAmount)
-                {
-                    Instance.LoggerInstance.Msg($"[Order] Order amount {amount} exceeds stash amount {stashAmount}");
-                    __result = false;
-                    return false;
-                }
-
-                // Find all components in the scene
-                var allComponents = UnityEngine.Object.FindObjectsOfType<Component>();
-                Instance.LoggerInstance.Msg($"[Order] Found {allComponents.Length} components in scene");
-
-                // Find player
-                var player = allComponents
-                    .FirstOrDefault(c => c.GetType().Name == "PlayerController");
-                if (player == null)
-                {
-                    Instance.LoggerInstance.Error("[Order] Could not find player!");
-                    return true;
-                }
-
-                Instance.LoggerInstance.Msg($"[Order] Found player at {player.transform.position}");
-
-                // Find nearest dead drop
-                var deadDrops = allComponents
-                    .Where(c => c.GetType().Name == "DeadDropBox")
-                    .ToList();
-
-                if (!deadDrops.Any())
-                {
-                    Instance.LoggerInstance.Error("[Order] No dead drops found!");
-                    return true;
-                }
-
-                Instance.LoggerInstance.Msg($"[Order] Found {deadDrops.Count} dead drops");
-
-                var nearestDeaddrop = deadDrops
-                    .OrderBy(box => Vector3.Distance(box.transform.position, player.transform.position))
-                    .First();
-
-                Instance.LoggerInstance.Msg($"[Order] Found nearest dead drop at {nearestDeaddrop.transform.position}");
-
-                // Remove from stash
-                var removeFromStash = __instance.GetType().GetMethod("RemoveFromStash", 
-                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-                if (removeFromStash == null)
-                {
-                    Instance.LoggerInstance.Error("[Order] Could not find RemoveFromStash method!");
-                    return true;
-                }
-
-                removeFromStash.Invoke(__instance, new object[] { amount });
-                Instance.LoggerInstance.Msg($"[Order] Removed {amount} from stash");
-                
-                // Add to nearest deaddrop
-                var addSeeds = nearestDeaddrop.GetType().GetMethod("AddSeeds", 
-                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-                if (addSeeds == null)
-                {
-                    Instance.LoggerInstance.Error("[Order] Could not find AddSeeds method!");
-                    return true;
-                }
-
-                addSeeds.Invoke(nearestDeaddrop, new object[] { amount });
-                Instance.LoggerInstance.Msg($"[Order] Added {amount} seeds to dead drop");
-                
-                __result = true;
-                return false;
+                return true; // Let the original method run
             }
             catch (Exception ex)
             {
-                Instance.LoggerInstance.Error($"[Order] Error processing order: {ex}");
+                Instance.LoggerInstance.Error($"Error in DeaddropConfirmed: {ex}");
+                return true;
+            }
+        }
+
+        private static void DeaddropConfirmedPostfix(object __instance)
+        {
+            try
+            {
+                // Use the setter method directly instead of property
+                var setterMethod = __instance.GetType().GetMethod("set_minsUntilDeaddropReady",
+                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                if (setterMethod != null)
+                {
+                    setterMethod.Invoke(__instance, new object[] { 0 });
+                }
+            }
+            catch (Exception ex)
+            {
+                Instance.LoggerInstance.Error($"Error in DeaddropConfirmedPostfix: {ex}");
+            }
+        }
+
+        private static bool SetDeaddropPrefix(object __instance, object[] items, ref int minsUntilReady)
+        {
+            try
+            {
+                minsUntilReady = 0;
+                return true; // Continue with original method with modified delay
+            }
+            catch (Exception ex)
+            {
+                Instance.LoggerInstance.Error($"Error in SetDeaddrop: {ex}");
+                return true;
+            }
+        }
+
+        private static bool GetDeadDropLimitPrefix(object __instance, ref float __result)
+        {
+            try
+            {
+                __result = float.MaxValue; // Set a very high limit
+                return false; // Skip original method
+            }
+            catch (Exception ex)
+            {
+                Instance.LoggerInstance.Error($"Error in GetDeadDropLimit: {ex}");
+                return true;
+            }
+        }
+
+        private static bool SetMinsUntilDeaddropReadyPrefix(object __instance, ref int value)
+        {
+            try
+            {
+                value = 0;
+                return true; // Continue with original method with modified value
+            }
+            catch (Exception ex)
+            {
+                Instance.LoggerInstance.Error($"Error in SetMinsUntilDeaddropReady: {ex}");
                 return true;
             }
         }
 
         public override void OnSceneWasLoaded(int buildIndex, string sceneName)
         {
-            LoggerInstance.Msg($"[Scene] Loaded into scene: {sceneName}");
+            // No logging needed
         }
     }
 } 
