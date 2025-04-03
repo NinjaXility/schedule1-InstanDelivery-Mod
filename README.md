@@ -1,5 +1,8 @@
 # Schedule 1 Mod
 
+# PLEASE PROVIDE CREDIT IF YOU ARE REMIXING THIS MOD. [Nexus](https://next.nexusmods.com/profile/pcbfan/mods?gameId=7381) Discord is that_one_lt.
+# Original creator was kua8. [kuas nexus](https://next.nexusmods.com/profile/kua8/mods?gameId=7381), [github](https://github.com/kua8), discord is kua8.
+
 A MelonLoader mod for Schedule 1.
 
 ## Prerequisites
