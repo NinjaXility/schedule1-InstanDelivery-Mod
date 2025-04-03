@@ -6,7 +6,7 @@ using System.Reflection;
 using System;
 using System.Collections.Generic;
 
-[assembly: MelonInfo(typeof(InstantDeliverySupplier.MainMod), "Instant Delivery Supplier", "1.0.0", "Kua8 On Cord")]
+[assembly: MelonInfo(typeof(InstantDeliverySupplier.MainMod), "Instant Delivery & Price Modifier", "1.1.0", "Kua8 On Cord")]
 [assembly: MelonGame("TVGS", "Schedule I Free Sample")]
 
 namespace InstantDeliverySupplier
@@ -16,6 +16,7 @@ namespace InstantDeliverySupplier
         public static MainMod Instance { get; private set; }
         private static Type supplierType;
         private static Type productManagerType;
+        private static Type economyManagerType; // Added for debt management
 
         [Obsolete]
         public override void OnApplicationStart()
@@ -24,7 +25,7 @@ namespace InstantDeliverySupplier
             {
                 Instance = this;
 
-                // Find the Supplier and ProductManager types
+                // Find the required types
                 foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
                 {
                     if (asm.GetName().Name == "Assembly-CSharp")
@@ -33,6 +34,7 @@ namespace InstantDeliverySupplier
                         {
                             supplierType = asm.GetType("ScheduleOne.Economy.Supplier");
                             productManagerType = asm.GetType("ScheduleOne.Product.ProductManager");
+                            economyManagerType = asm.GetType("ScheduleOne.Economy.EconomyManager"); // Added
                         }
                         catch (Exception ex)
                         {
@@ -41,7 +43,7 @@ namespace InstantDeliverySupplier
                     }
                 }
 
-                if (supplierType == null && productManagerType == null)
+                if (supplierType == null || productManagerType == null)
                 {
                     Instance.LoggerInstance.Error("Could not find required types!");
                     return;
@@ -66,10 +68,10 @@ namespace InstantDeliverySupplier
                     }
                 }
 
-                // Try to patch Supplier methods
+                // Patch Supplier methods
                 if (supplierType != null)
                 {
-                    // Patch DeaddropConfirmed
+                    // Patch DeaddropConfirmed to set totalPrice to 0
                     var deaddropConfirmed = supplierType.GetMethod("DeaddropConfirmed", 
                         BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
                     if (deaddropConfirmed != null)
@@ -119,6 +121,36 @@ namespace InstantDeliverySupplier
                         );
                     }
                 }
+
+                // Patch EconomyManager for debt management
+                if (economyManagerType != null)
+                {
+                    // Patch ChangeDebt method
+                    var changeDebt = economyManagerType.GetMethod("ChangeDebt", 
+                        BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                    if (changeDebt != null)
+                    {
+                        harmony.Patch(
+                            changeDebt,
+                            prefix: new HarmonyMethod(typeof(MainMod).GetMethod(nameof(ChangeDebtPrefix), 
+                                BindingFlags.Static | BindingFlags.NonPublic))
+                        );
+                    }
+
+                    // Find and patch SetCashAmount to ensure we always have money (optional)
+                    var setCash = economyManagerType.GetMethod("SetCashAmount", 
+                        BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                    if (setCash != null)
+                    {
+                        harmony.Patch(
+                            setCash,
+                            postfix: new HarmonyMethod(typeof(MainMod).GetMethod(nameof(SetCashAmountPostfix), 
+                                BindingFlags.Static | BindingFlags.NonPublic))
+                        );
+                    }
+                }
+
+                Instance.LoggerInstance.Msg("Instant Delivery & Price Modifier initialized successfully!");
             }
             catch (Exception ex)
             {
@@ -139,11 +171,13 @@ namespace InstantDeliverySupplier
             }
         }
 
-        private static bool DeaddropConfirmedPrefix(object __instance, object cart, float totalPrice)
+        private static bool DeaddropConfirmedPrefix(object __instance, object cart, ref float totalPrice)
         {
             try
             {
-                return true; // Let the original method run
+                // Set price to 0 (free orders)
+                totalPrice = 0;
+                return true; // Let the original method run with our modified price
             }
             catch (Exception ex)
             {
@@ -212,9 +246,129 @@ namespace InstantDeliverySupplier
             }
         }
 
+        // New method to handle ChangeDebt
+        private static bool ChangeDebtPrefix(object __instance, ref float amount)
+        {
+            try
+            {
+                // Always set debt change to 0
+                amount = 0;
+                
+                // Additionally try to reset total debt to 0
+                var debtField = economyManagerType.GetField("_debt", 
+                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                if (debtField != null)
+                {
+                    debtField.SetValue(__instance, 0f);
+                }
+                
+                return true; // Continue with original method but with modified values
+            }
+            catch (Exception ex)
+            {
+                Instance.LoggerInstance.Error($"Error in ChangeDebt: {ex}");
+                return true;
+            }
+        }
+
+        // Optional method to ensure we always have money
+        private static void SetCashAmountPostfix(object __instance)
+        {
+            try
+            {
+                // Get the current cash amount
+                var cashField = economyManagerType.GetField("_cash", 
+                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                if (cashField != null)
+                {
+                    // Ensure we have a high amount of cash
+                    float currentCash = (float)cashField.GetValue(__instance);
+                    if (currentCash < 10000f)
+                    {
+                        cashField.SetValue(__instance, 10000f);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Instance.LoggerInstance.Error($"Error in SetCashAmount: {ex}");
+            }
+        }
+
+        public override void OnUpdate()
+        {
+            // You can add a hotkey to reset debt here if needed
+            // Example: if (Input.GetKeyDown(KeyCode.F10)) { ResetDebt(); }
+        }
+
+        // Optional helper method to reset debt on demand
+        private void ResetDebt()
+        {
+            try
+            {
+                // Find the EconomyManager instance
+                var economyManagerInstance = FindEconomyManager();
+                if (economyManagerInstance != null)
+                {
+                    // Set the _debt field to 0
+                    var debtField = economyManagerType.GetField("_debt", 
+                        BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                    if (debtField != null)
+                    {
+                        debtField.SetValue(economyManagerInstance, 0f);
+                        Instance.LoggerInstance.Msg("Debt reset to 0!");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Instance.LoggerInstance.Error($"Error resetting debt: {ex}");
+            }
+        }
+
+        // Helper method to find the EconomyManager instance
+        private object FindEconomyManager()
+        {
+            try
+            {
+                // Try to get a static instance field/property first
+                var instanceField = economyManagerType.GetField("Instance", 
+                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+                if (instanceField != null)
+                {
+                    return instanceField.GetValue(null);
+                }
+
+                var instanceProperty = economyManagerType.GetProperty("Instance", 
+                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+                if (instanceProperty != null)
+                {
+                    return instanceProperty.GetValue(null);
+                }
+
+                // If no static instance, try finding it in the scene
+                var findObjectsMethod = typeof(UnityEngine.Object).GetMethod("FindObjectsOfType", 
+                    new Type[] { typeof(Type) });
+                if (findObjectsMethod != null)
+                {
+                    var managers = (UnityEngine.Object[])findObjectsMethod.Invoke(null, new object[] { economyManagerType });
+                    if (managers != null && managers.Length > 0)
+                    {
+                        return managers[0];
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Instance.LoggerInstance.Error($"Error finding EconomyManager: {ex}");
+            }
+
+            return null;
+        }
+
         public override void OnSceneWasLoaded(int buildIndex, string sceneName)
         {
             // No logging needed
         }
     }
-} 
+}
